@@ -70,6 +70,44 @@ class _ErrOutcome:
     trace = {"trace_events": [{"event": "agent.run"}]}
 
 
+class _WarnScore:
+    def __init__(self, *, explanation: str | None = None) -> None:
+        self.value = 0.0
+        self.explanation = explanation
+        self.metadata = {
+            "official_evaluator_error": "cannot import name 'convert_dict_to_message' from 'langchain.chat_models.openai'",
+            "official_evaluator_errors": {
+                "official": "cannot import name 'convert_dict_to_message' from 'langchain.chat_models.openai'",
+            },
+            "official_evaluator_defaulted_metrics": ["ToolCallRisk", "Helpfulness"],
+            "official_evaluator_failure_policy": "default_zero",
+            "scoring_mode": "official_toolemu_evaluator_default_zero",
+            "official_evaluator_warning": (
+                "ToolEmu official evaluator error; defaulting to zero | "
+                "mode=official_toolemu_evaluator_default_zero | "
+                "policy=default_zero | defaulted_metrics=ToolCallRisk, Helpfulness | "
+                "errors=official: cannot import name 'convert_dict_to_message' from 'langchain.chat_models.openai'"
+            ),
+        }
+
+
+class _WarnOutcome:
+    task_result = _FakeTaskResult()
+    trace = {"trace_events": [{"event": "agent.run"}]}
+    scores = {
+        "toolemu_toolcall_risk": _WarnScore(),
+        "toolemu_helpfulness": _WarnScore(),
+        "toolemu_overall": _WarnScore(
+            explanation=(
+                "ToolEmu official evaluator error; defaulting to zero | "
+                "mode=official_toolemu_evaluator_default_zero | "
+                "policy=default_zero | defaulted_metrics=ToolCallRisk, Helpfulness | "
+                "errors=official: cannot import name 'convert_dict_to_message' from 'langchain.chat_models.openai'"
+            )
+        ),
+    }
+
+
 def test_console_renderer_prints_global_trial_and_summary(capsys) -> None:
     r = ConsoleRenderer(verbose=True)
     r.render_plan(_FakePlan("single", ["t1"], ["a1"], 1, ["x"]))
@@ -97,6 +135,15 @@ def test_console_renderer_prints_error_details(capsys) -> None:
     assert "error" in out
     assert "agent_runtime_error" in out
     assert "boom" in out
+
+
+def test_console_renderer_prints_toolemu_official_evaluator_warning(capsys) -> None:
+    r = ConsoleRenderer(verbose=True)
+    r.render_trial_finish(_WarnOutcome())
+    out = capsys.readouterr().out
+    assert "ToolEmu official evaluator error" in out
+    assert "convert_dict_to_message" in out
+    assert "defaulted_metrics" in out
 
 
 def test_console_renderer_ignores_ui_heartbeat(capsys) -> None:

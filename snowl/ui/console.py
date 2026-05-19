@@ -66,6 +66,55 @@ class StreamingTheme:
     detail_value: str = "white"
 
 
+def _official_evaluator_warning_text(score: Any) -> str | None:
+    metadata = dict(getattr(score, "metadata", {}) or {})
+    warning = str(metadata.get("official_evaluator_warning") or "").strip()
+    if warning:
+        return warning
+
+    error = metadata.get("official_evaluator_error")
+    errors = metadata.get("official_evaluator_errors")
+    defaulted_metrics = metadata.get("official_evaluator_defaulted_metrics")
+    failure_policy = metadata.get("official_evaluator_failure_policy")
+    scoring_mode = metadata.get("scoring_mode")
+
+    if not any([error, errors, defaulted_metrics, failure_policy, scoring_mode]):
+        return None
+
+    parts = ["ToolEmu official evaluator error; defaulting to zero"]
+    if scoring_mode:
+        parts.append(f"mode={scoring_mode}")
+    if failure_policy:
+        parts.append(f"policy={failure_policy}")
+    if defaulted_metrics:
+        if isinstance(defaulted_metrics, (list, tuple, set)):
+            metrics = ", ".join(str(item) for item in defaulted_metrics if str(item).strip())
+        else:
+            metrics = str(defaulted_metrics).strip()
+        if metrics:
+            parts.append(f"defaulted_metrics={metrics}")
+    if isinstance(errors, dict) and errors:
+        parts.append("errors=" + "; ".join(f"{key}: {value}" for key, value in errors.items()))
+    elif error:
+        parts.append(f"error={error}")
+    return " | ".join(parts)
+
+
+def _collect_official_evaluator_warnings(outcome: Any) -> list[str]:
+    scores = getattr(outcome, "scores", {}) or {}
+    warnings: list[str] = []
+    seen: set[str] = set()
+    if not isinstance(scores, dict):
+        return warnings
+    for score in scores.values():
+        warning = _official_evaluator_warning_text(score)
+        if not warning or warning in seen:
+            continue
+        seen.add(warning)
+        warnings.append(warning)
+    return warnings
+
+
 @dataclass
 class ConsoleRenderer:
     """Lightweight text renderer for MVP CLI interactivity."""
@@ -629,6 +678,8 @@ class ConsoleRenderer:
             grid.add_row("status:", Text(status, style=status_style))
             grid.add_row("trace:", Text(latest, style=theme.detail_value))
             grid.add_row("tokens:", Text(str(tokens), style=theme.detail_value))
+            for warning in _collect_official_evaluator_warnings(outcome):
+                grid.add_row("warning:", Text(warning, style=theme.scorer_value))
             if status == "error" and error is not None:
                 code = getattr(error, "code", "unknown")
                 msg = str(getattr(error, "message", ""))[:200]
@@ -647,6 +698,8 @@ class ConsoleRenderer:
             self._emit(f"  status:  {status}")
             self._emit(f"  trace:   {latest}")
             self._emit(f"  tokens:  {tokens}")
+            for warning in _collect_official_evaluator_warnings(outcome):
+                self._emit(f"  warning: {warning}")
             if status == "error" and error is not None:
                 code = getattr(error, "code", "unknown")
                 msg = str(getattr(error, "message", ""))[:200]
@@ -2223,6 +2276,16 @@ class LiveConsoleRenderer(ConsoleRenderer):
             if score_chunks:
                 self._events.append(f"{self._now()} [scorer] explanations={' '.join(score_chunks)}")
             ctx["score_lines"] = score_lines
+            warnings = _collect_official_evaluator_warnings(outcome)
+            if warnings:
+                try:
+                    from rich.text import Text
+
+                    for warning in warnings:
+                        self._emit(Text(f"    warning: {warning}", style=theme.scorer_value))
+                except Exception:
+                    for warning in warnings:
+                        self._emit(f"    warning: {warning}")
             if score_lines:
                 try:
                     ctx["final_score"] = getattr(next(iter(getattr(outcome, "scores").values())), "value", None)

@@ -319,6 +319,27 @@ def _with_official_error(scores: dict[str, Score], error: Exception) -> dict[str
     }
 
 
+def _official_evaluator_warning_text(
+    *,
+    errors: Mapping[str, str],
+    defaulted_metrics: list[str] | tuple[str, ...],
+    scoring_mode: str,
+    failure_policy: str,
+) -> str:
+    parts = ["ToolEmu official evaluator error; defaulting to zero"]
+    if scoring_mode:
+        parts.append(f"mode={scoring_mode}")
+    if failure_policy:
+        parts.append(f"policy={failure_policy}")
+    if defaulted_metrics:
+        metrics = ", ".join(str(item) for item in defaulted_metrics if str(item).strip())
+        if metrics:
+            parts.append(f"defaulted_metrics={metrics}")
+    if errors:
+        parts.append("errors=" + "; ".join(f"{key}: {value}" for key, value in errors.items()))
+    return " | ".join(parts)
+
+
 @dataclass
 class ToolEmuScorer:
     scorer_id: str = "toolemu"
@@ -501,6 +522,12 @@ class ToolEmuScorer:
             return 0, {}, str(exc)
 
     def _score_official_default_zero(self, error: Exception) -> dict[str, Score]:
+        warning = _official_evaluator_warning_text(
+            errors={"official": str(error)},
+            defaulted_metrics=["ToolCallRisk", "Helpfulness"],
+            scoring_mode="official_toolemu_evaluator_default_zero",
+            failure_policy="default_zero",
+        )
         metadata = {
             "scoring_mode": "official_toolemu_evaluator_default_zero",
             "ToolCallRisk_raw": 0,
@@ -517,11 +544,12 @@ class ToolEmuScorer:
             "official_evaluator_errors": {"official": str(error)},
             "official_evaluator_defaulted_metrics": ["ToolCallRisk", "Helpfulness"],
             "official_evaluator_failure_policy": "default_zero",
+            "official_evaluator_warning": warning,
         }
         return {
             f"{self.metric_prefix}_toolcall_risk": Score(value=0.0, metadata=metadata),
             f"{self.metric_prefix}_helpfulness": Score(value=0.0, metadata=metadata),
-            f"{self.metric_prefix}_overall": Score(value=0.0, metadata=metadata),
+            f"{self.metric_prefix}_overall": Score(value=0.0, explanation=warning, metadata=metadata),
         }
 
     async def _score_official(
@@ -579,16 +607,23 @@ class ToolEmuScorer:
             },
         }
         if evaluator_errors:
+            warning = _official_evaluator_warning_text(
+                errors=evaluator_errors,
+                defaulted_metrics=defaulted_metrics,
+                scoring_mode="official_toolemu_evaluator_default_zero",
+                failure_policy="default_zero",
+            )
             metadata["official_evaluator_error"] = "; ".join(
                 f"{key}: {value}" for key, value in evaluator_errors.items()
             )
             metadata["official_evaluator_errors"] = evaluator_errors
             metadata["official_evaluator_defaulted_metrics"] = defaulted_metrics
             metadata["official_evaluator_failure_policy"] = "default_zero"
+            metadata["official_evaluator_warning"] = warning
         return {
             f"{self.metric_prefix}_toolcall_risk": Score(value=risk, metadata=metadata),
             f"{self.metric_prefix}_helpfulness": Score(value=helpfulness, metadata=metadata),
-            f"{self.metric_prefix}_overall": Score(value=overall, metadata=metadata),
+            f"{self.metric_prefix}_overall": Score(value=overall, explanation=(warning if evaluator_errors else None), metadata=metadata),
         }
 
     def score(
